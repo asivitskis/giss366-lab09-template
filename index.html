@@ -1,0 +1,219 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Animal Tracking Dashboard</title>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/maplibre-gl@4.7.1/dist/maplibre-gl.css">
+  <style>
+    * { box-sizing: border-box; }
+    body { margin: 0; height: 100vh; display: flex; flex-direction: column; font-family: system-ui, sans-serif; }
+    header, footer { padding: 0.6rem 1rem; }
+    h1 { margin: 0; font-size: 1.25rem; }
+    footer { font-size: 0.75rem; }
+
+    main { flex: 1; min-height: 0; display: grid; grid-template-columns: 2fr 1fr; gap: 0.75rem; padding: 0 1rem; }
+    #map { border: 1px solid #ccc; }
+    aside { overflow: auto; padding: 0.75rem; border: 1px solid #ccc; }
+    input { width: 100%; }
+    .chart-box { height: 240px; margin-top: 1rem; }
+
+    #legend { display: flex; flex-wrap: wrap; gap: 0.3rem 0.9rem; padding: 0; list-style: none; }
+    .swatch { display: inline-block; width: 0.8rem; height: 0.8rem; margin-right: 0.3rem; border-radius: 50%; }
+
+    @media (max-width: 800px) {
+      body { height: auto; }
+      main { grid-template-columns: 1fr; }
+      #map { height: 55vh; }
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <h1 id="title"></h1>
+    <p id="question"></p>
+  </header>
+
+  <main>
+    <div id="map"></div>
+
+    <aside>
+      <label for="date">Show locations up to <output id="dateOut"></output></label>
+      <input type="range" id="date">
+      <p><span id="count">0</span> locations shown</p>
+
+      <div class="chart-box"><canvas id="chart"></canvas></div>
+      <ul id="legend"></ul>
+    </aside>
+  </main>
+
+  <footer id="credit"></footer>
+
+  <script src="https://cdn.jsdelivr.net/npm/maplibre-gl@4.7.1/dist/maplibre-gl.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
+  <script>
+    // Settings: change these to use a different dataset
+    const CONFIG = {
+      title: "Golden Eagle Migration Patterns 2002-2003",
+      question: "How does each bird's latitude change over the tracking period?",
+      dataUrl: "data/tracks.geojson",
+      idField: "animal_id",
+      timeField: "timestamp",
+      valueLabel: "Latitude (°N)",
+      colors: ["#1b9e77", "#d95f02", "#7570b3", "#e7298a", "#66a61e", "#a6761d"],
+      basemap: "https://basemaps.cartocdn.com/gl/positron-gl-style/style.json",
+      credit: 'Smith JP. 2019. Data from: Study "HawkWatch International Golden Eagles". ' +
+              "Movebank Data Repository. https://www.doi.org/10.5441/001/1.95r77m9k. CC0 1.0."
+    };
+
+    const DAY = 24 * 60 * 60 * 1000;   // milliseconds in one day
+    const $ = id => document.getElementById(id);   // short name for finding page elements
+
+    let points = [];      // one object per GPS location: { id, time, value, feature }
+    let animals = [];     // list of animal ids
+    let colorOf = {};     // animal id -> color
+    let firstTime, lastTime;
+    let map, chart;
+
+    const formatDate = time => new Date(time).toISOString().slice(0, 10);
+
+    // 1. Load the GeoJSON and turn each feature into a simple object
+    async function loadData() {
+      const response = await fetch(CONFIG.dataUrl);
+      const geojson = await response.json();
+
+      points = geojson.features.map(f => {
+        const id = String(f.properties[CONFIG.idField]);
+        const time = Date.parse(f.properties[CONFIG.timeField]);
+        const value = f.geometry.coordinates[1];   // latitude
+        f.properties = { id, value, date: formatDate(time) };
+        return { id, time, value, feature: f };
+      });
+      points.sort((a, b) => a.time - b.time);
+
+      animals = [...new Set(points.map(p => p.id))];
+      animals.forEach((id, i) => colorOf[id] = CONFIG.colors[i % CONFIG.colors.length]);
+      firstTime = points[0].time;
+      lastTime = points[points.length - 1].time;
+    }
+
+    // 2. Fill in the page text and set up the slider
+    function setupPage() {
+      $("title").textContent = CONFIG.title;
+      $("question").textContent = CONFIG.question;
+      $("credit").textContent = CONFIG.credit;
+      $("legend").innerHTML = animals.map(id =>
+        `<li><span class="swatch" style="background:${colorOf[id]}"></span>${id}</li>`).join("");
+
+      $("date").min = firstTime;
+      $("date").max = lastTime;
+      $("date").step = DAY;
+      $("date").value = lastTime;
+      $("date").addEventListener("input", update);
+    }
+
+    // 3. Build the map
+    function setupMap() {
+      map = new maplibregl.Map({ container: "map", style: CONFIG.basemap });
+      map.addControl(new maplibregl.NavigationControl(), "top-left");
+
+      const bounds = new maplibregl.LngLatBounds();
+      points.forEach(p => bounds.extend(p.feature.geometry.coordinates));
+      map.fitBounds(bounds, { padding: 40, animate: false });
+
+      map.on("load", () => {
+        const empty = { type: "FeatureCollection", features: [] };
+        map.addSource("tracks", { type: "geojson", data: empty });
+        map.addSource("locations", { type: "geojson", data: empty });
+
+        // Color each animal by its id: ["match", id, "A", colorA, "B", colorB, ..., fallback]
+        const animalColor = ["match", ["get", "id"]];
+        animals.forEach(id => animalColor.push(id, colorOf[id]));
+        animalColor.push("#888888");
+
+        map.addLayer({
+          id: "tracks", type: "line", source: "tracks",
+          paint: { "line-color": animalColor, "line-width": 1.2 }
+        });
+        map.addLayer({
+          id: "locations", type: "circle", source: "locations",
+          paint: { "circle-color": animalColor, "circle-radius": 3.5 }
+        });
+
+        map.on("click", "locations", e => {
+          const p = e.features[0].properties;
+          new maplibregl.Popup()
+            .setLngLat(e.lngLat)
+            .setText(`${p.id} | ${p.date} | ${CONFIG.valueLabel}: ${Number(p.value).toFixed(2)}`)
+            .addTo(map);
+        });
+
+        update();
+      });
+    }
+
+    // 4. Draw the chart. To try a different chart, replace this whole function
+    //    with one from chart-examples.js
+    function drawChart(shown, cutoff) {
+      if (chart) chart.destroy();
+
+      chart = new Chart($("chart"), {
+        type: "scatter",
+        data: {
+          datasets: animals.map(id => ({
+            label: id,
+            data: shown.filter(p => p.id === id).map(p => ({ x: p.time, y: p.value })),
+            borderColor: colorOf[id],
+            backgroundColor: colorOf[id],
+            showLine: true,
+            pointRadius: 1.5
+          }))
+        },
+        options: {
+          maintainAspectRatio: false,
+          animation: false,
+          plugins: { legend: { display: false } },
+          scales: {
+            x: {
+              type: "linear",
+              min: firstTime,
+              max: lastTime,
+              ticks: { maxTicksLimit: 6, callback: time => formatDate(time).slice(0, 7) }
+            },
+            y: { title: { display: true, text: CONFIG.valueLabel } }
+          }
+        }
+      });
+    }
+
+    // 5. Runs every time the slider moves
+    function update() {
+      if (!map.getSource("locations")) return;   // wait until the map has loaded
+
+      const cutoff = Number($("date").value);
+      const shown = points.filter(p => p.time <= cutoff);
+
+      const lines = animals.map(id => ({
+        type: "Feature",
+        properties: { id },
+        geometry: {
+          type: "LineString",
+          coordinates: shown.filter(p => p.id === id).map(p => p.feature.geometry.coordinates)
+        }
+      })).filter(line => line.geometry.coordinates.length > 1);
+
+      map.getSource("locations").setData({ type: "FeatureCollection", features: shown.map(p => p.feature) });
+      map.getSource("tracks").setData({ type: "FeatureCollection", features: lines });
+
+      $("dateOut").textContent = formatDate(cutoff);
+      $("count").textContent = shown.length.toLocaleString();
+      drawChart(shown, cutoff);
+    }
+
+    loadData().then(() => {
+      setupPage();
+      setupMap();
+    });
+  </script>
+</body>
+</html>
