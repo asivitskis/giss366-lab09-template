@@ -55,7 +55,7 @@
     // Settings: change these to use a different dataset
     const CONFIG = {
       title: "Golden Eagle Migration Patterns 2002-2003",
-      question: "How does each bird's latitude change over the tracking period?",
+      question: "[you will enter your question here]]",
       dataUrl: "data/tracks.geojson",
       idField: "animal_id",
       timeField: "timestamp",
@@ -154,38 +154,8 @@
 
     // 4. Draw the chart. To try a different chart, replace this whole function
     //    with one from chart-examples.js
-    function drawChart(shown, cutoff) {
-      if (chart) chart.destroy();
-
-      chart = new Chart($("chart"), {
-        type: "scatter",
-        data: {
-          datasets: animals.map(id => ({
-            label: id,
-            data: shown.filter(p => p.id === id).map(p => ({ x: p.time, y: p.value })),
-            borderColor: colorOf[id],
-            backgroundColor: colorOf[id],
-            showLine: true,
-            pointRadius: 1.5
-          }))
-        },
-        options: {
-          maintainAspectRatio: false,
-          animation: false,
-          plugins: { legend: { display: false } },
-          scales: {
-            x: {
-              type: "linear",
-              min: firstTime,
-              max: lastTime,
-              ticks: { maxTicksLimit: 6, callback: time => formatDate(time).slice(0, 7) }
-            },
-            y: { title: { display: true, text: CONFIG.valueLabel } }
-          }
-        }
-      });
-    }
-
+    
+    
     // 5. Runs every time the slider moves
     function update() {
       if (!map.getSource("locations")) return;   // wait until the map has loaded
